@@ -10,7 +10,7 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.use(cors());
 app.use(express.json());
-const PORT = process.env.PORT || 3000;
+const PORT = 3011;
 const AUST_AFFILIATIONS = [
   "Ahsanullah University Of Science and Technology",
   "AUST",
@@ -367,6 +367,8 @@ app.get("/atcoder_standings", async (req, res) => {
     fullContestName = `AtCoder Regular Contest ${suffix}`;
   } else if (prefix === "ahc") {
     fullContestName = `AtCoder Heuristic Contest ${suffix}`;
+  } else if (prefix === "agc") {
+    fullContestName = `AtCoder Grand Contest ${suffix}`;
   } else {
     return res
       .status(400)
