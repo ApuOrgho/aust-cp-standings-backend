@@ -26,10 +26,12 @@ const PUPPETEER_LAUNCH_OPTIONS = {
 app.get("/", (req, res) => {
   res.json({ status: "ok" });
 });
-const AUST_AFFILIATIONS = [
-  "Ahsanullah University Of Science and Technology",
-  "AUST",
-];
+// AtCoder's affiliation search does a case-sensitive substring match, so a
+// single query (and especially the wrong casing) misses students who typed
+// their affiliation differently. We fan out over the common variants and
+// re-verify every result row ourselves (see AUST_PATTERN in the route below)
+// since the search also happily returns unrelated schools like "HAUST"/"BAUST".
+const AUST_AFFILIATIONS = ["AUST", "aust", "Ahsanullah", "ahsanullah"];
 
 const RATINGS_URL = (affiliation) =>
   `https://atcoder.jp/ranking?f.Country=&f.UserScreenName=&f.Affiliation=${encodeURIComponent(
@@ -302,15 +304,28 @@ app.get("/atcoder_ratings_all", async (req, res) => {
         await page.waitForSelector("table");
 
         const ratings = await page.evaluate(() => {
+          // The filter sidebar on this page is also a <table>, so a plain
+          // "table tbody tr" selector picks up its (blank) rows too. Anchoring
+          // on the real ranking row's username link skips those for free, and
+          // re-checking each row's own affiliation text (rather than trusting
+          // AtCoder's case-sensitive substring search) keeps out unrelated
+          // schools such as "HAUST" or "BAUST" that also contain "aust".
+          const AUST_PATTERN = /\bahsanullah\b|\baust\b/i;
           const rows = Array.from(document.querySelectorAll("table tbody tr"));
+
           return rows
             .map((row) => {
-              const cols = row.querySelectorAll("td");
-              if (cols.length < 4) return null;
+              const usernameLink = row.querySelector("a.username");
+              if (!usernameLink) return null;
 
-              // Extract username
-              const rawUsername = cols[1].innerText.trim() || "";
-              const username = rawUsername.split("\n")[0].trim() || "";
+              const affiliationEl = row.querySelector(".ranking-affiliation");
+              const affiliation = affiliationEl
+                ? affiliationEl.textContent.trim()
+                : "";
+              if (!AUST_PATTERN.test(affiliation)) return null;
+
+              const cols = row.querySelectorAll("td");
+              const username = usernameLink.textContent.trim();
 
               // Extract rating (usually last column, index 4)
               const rating = cols[4]?.innerText.trim() || "";
@@ -451,8 +466,13 @@ app.get("/codeforces_ratings_all", async (req, res) => {
       "AUST",
     ];
 
-    // Fetch all rated users from Codeforces API
-    const apiUrl = `https://codeforces.com/api/user.ratedList?activeOnly=true`;
+    // Codeforces' own activeOnly=true flag is much stricter than "active in the
+    // last few months" — empirically it only keeps users who competed in the
+    // last few weeks, which cut AUST's list down to ~1/3 of its real size.
+    // activeOnly=false (the default) still excludes truly retired accounts
+    // while keeping everyone who has a current rating, which matches what we
+    // actually want here.
+    const apiUrl = `https://codeforces.com/api/user.ratedList?activeOnly=false`;
     const response = await fetch(apiUrl);
     const data = await response.json();
 

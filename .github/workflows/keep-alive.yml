@@ -1,0 +1,15 @@
+name: Keep Render backend awake
+
+on:
+  schedule:
+    # Every 10 minutes — comfortably inside Render free tier's ~15 min
+    # inactivity spin-down window.
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health check
+        run: curl -sS -m 30 -o /dev/null -w "HTTP %{http_code}\n" https://aust-cp-standings-backend-1.onrender.com/
