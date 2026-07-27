@@ -431,133 +431,149 @@ app.get("/atcoder_standings", async (req, res) => {
 });
 
 app.get("/codeforces_ratings_all", async (req, res) => {
-  const ORG_IDS = [463, 291];
-
   try {
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+    const ORG_NAMES = [
+      "Ahsanullah University of Science and Technology",
+      "AUST",
+    ];
 
-    let allRatings = [];
+    // Fetch all rated users from Codeforces API
+    const apiUrl = `https://codeforces.com/api/user.ratedList?activeOnly=true`;
+    const response = await fetch(apiUrl);
+    const data = await response.json();
 
-    for (const orgId of ORG_IDS) {
-      ///console.log(`📥 Scraping Codeforces org ID: ${orgId}`);
-
-      let pageNum = 1;
-
-      let previousUsernames = new Set();
-
-      while (true) {
-        const page = await browser.newPage();
-        const url = `https://codeforces.com/ratings/organization/${orgId}/page/${pageNum}`;
-        ///console.log(`🔎 Visiting: ${url}`);
-
-        await page.setUserAgent(
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-        );
-
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-        try {
-          await page.waitForSelector(".datatable tbody tr", { timeout: 10000 });
-        } catch (e) {
-          ///console.log(`⛔ No data table on page ${pageNum}, stopping.`);
-          await page.close();
-          break;
-        }
-
-        const ratings = await page.evaluate(() => {
-          const rows = Array.from(
-            document.querySelectorAll(".datatable tbody tr")
-          );
-          const results = [];
-          for (const row of rows) {
-            const cells = row.querySelectorAll("td");
-            const rank = cells[0]?.innerText.trim();
-            if (rank === "-") break;
-            const username = cells[1]?.innerText.trim();
-            const contestParticipated = cells[2]?.innerText.trim();
-            const rating = cells[3]?.innerText.trim();
-            if (username && contestParticipated && rating) {
-              results.push({ username, contestParticipated, rating });
-            }
-          }
-          return results;
-        });
-
-        const currentUsernames = new Set(ratings.map((r) => r.username));
-        const isSameAsPrevious =
-          ratings.length === previousUsernames.size &&
-          [...currentUsernames].every((username) =>
-            previousUsernames.has(username)
-          );
-
-        if (ratings.length === 0 || isSameAsPrevious) {
-          /*console.log(
-            `✅ Repetition or no new data on page ${pageNum}. Stopping.`
-          );*/
-          await page.close();
-          break;
-        }
-
-        /*console.log(`📄 Found ${ratings.length} users on page ${pageNum}`);
-        ratings.forEach((r, i) =>
-          console.log(`${i + 1}. ${r.username} - ${r.rating}`)
-        );*/
-
-        allRatings.push(...ratings);
-        previousUsernames = currentUsernames;
-
-        await page.close();
-        pageNum++;
-      }
+    if (data.status !== "OK") {
+      throw new Error("Codeforces API returned an error");
     }
 
-    await browser.close();
+    const result = data.result;
 
-    // Deduplicate by username, keep highest rating
-    const deduped = new Map();
-    for (const user of allRatings) {
-      if (!deduped.has(user.username)) {
-        deduped.set(user.username, user);
-      } else {
-        const existing = deduped.get(user.username);
-        if (parseInt(user.rating) > parseInt(existing.rating)) {
-          deduped.set(user.username, user);
-        }
-      }
-    }
+    // Filter and merge users from both organizations
+    const mergedUsers = result
+      .filter(
+        (user) =>
+          user.organization &&
+          user.rank !== "-" &&
+          ORG_NAMES.some(
+            (org) =>
+              user.organization.trim().toLowerCase() === org.toLowerCase()
+          )
+      )
+      .map((u) => ({
+        username: u.handle || "-",
+        contestParticipated:
+          u.contestCount != null ? String(u.contestCount) : "0",
+        rating: u.rating != null ? String(u.rating) : "0",
+        maxRating: u.maxRating != null ? String(u.maxRating) : "0",
+        rankTitle: u.rank || "-",
+        organization: u.organization || "",
+        contribution: u.contribution != null ? u.contribution : 0,
+        lastOnline: u.lastOnlineTimeSeconds
+          ? new Date(u.lastOnlineTimeSeconds * 1000).toISOString()
+          : null,
+      }));
 
-    const finalRatings = Array.from(deduped.values());
-    res.json({ ratings_all_codeforces: finalRatings });
+    res.json({ ratings_all_codeforces: mergedUsers });
   } catch (err) {
-    console.error("❌ Scraping failed:", err);
-    res.status(500).json({ error: "Failed to fetch Codeforces ratings" });
+    console.error("❌ Error fetching Codeforces data:", err);
+    res.status(500).json({
+      error: "Failed to fetch Codeforces ratings",
+      details: err.message,
+    });
+  }
+});
+app.get("/codeforces_inactive_included", async (req, res) => {
+  try {
+    const ORG_NAMES = [
+      "Ahsanullah University of Science and Technology",
+      "AUST",
+    ];
+
+    // Fetch all rated users from Codeforces API
+    const apiUrl = `https://codeforces.com/api/user.ratedList?includeRetired=true`;
+    const response = await fetch(apiUrl);
+    const data = await response.json();
+
+    if (data.status !== "OK") {
+      throw new Error("Codeforces API returned an error");
+    }
+
+    const result = data.result;
+
+    // Filter and merge users from both organizations
+    const mergedUsers = result
+      .filter(
+        (user) =>
+          user.organization &&
+          user.rank !== "-" &&
+          ORG_NAMES.some(
+            (org) =>
+              user.organization.trim().toLowerCase() === org.toLowerCase()
+          )
+      )
+      .map((u) => ({
+        username: u.handle || "-",
+        contestParticipated:
+          u.contestCount != null ? String(u.contestCount) : "0",
+        rating: u.rating != null ? String(u.rating) : "0",
+        maxRating: u.maxRating != null ? String(u.maxRating) : "0",
+        rankTitle: u.rank || "-",
+        organization: u.organization || "",
+        contribution: u.contribution != null ? u.contribution : 0,
+        lastOnline: u.lastOnlineTimeSeconds
+          ? new Date(u.lastOnlineTimeSeconds * 1000).toISOString()
+          : null,
+      }));
+
+    res.json({ ratings_all_codeforces: mergedUsers });
+  } catch (err) {
+    console.error("❌ Error fetching Codeforces data:", err);
+    res.status(500).json({
+      error: "Failed to fetch Codeforces ratings",
+      details: err.message,
+    });
   }
 });
 
-const austHandles = [
-  "mursalin",
-  "sami_01",
-  "rifat_69",
-  "tanvir.cse",
-  "hello_world_aust",
+const CODEFORCES_AUST_ORG_NAMES = [
+  "Ahsanullah University of Science and Technology",
+  "AUST",
 ];
-const austSet = new Set(austHandles.map((h) => h.toLowerCase()));
 
 app.get("/codeforces_standings/:contestId", async (req, res) => {
   const contestId = req.params.contestId;
-  const url = `https://codeforces.com/api/contest.standings?contestId=${contestId}&from=1&count=50000&showUnofficial=false`;
+  // Codeforces now rejects anonymous requests to non-gym contest.standings
+  // that include any extra parameter (from/count/showUnofficial) with HTTP 400.
+  // A bare contestId call already returns the full official standings.
+  const url = `https://codeforces.com/api/contest.standings?contestId=${contestId}`;
+  const ratedListUrl =
+    "https://codeforces.com/api/user.ratedList?includeRetired=true";
 
   try {
-    const response = await axios.get(url);
+    const [response, ratedListResponse] = await Promise.all([
+      axios.get(url),
+      axios.get(ratedListUrl),
+    ]);
     const data = response.data;
 
     if (data.status !== "OK") {
       return res
         .status(404)
         .json({ error: "Contest not found or failed to fetch standings" });
+    }
+
+    const austSet = new Set();
+    if (ratedListResponse.data.status === "OK") {
+      for (const user of ratedListResponse.data.result) {
+        if (
+          user.organization &&
+          CODEFORCES_AUST_ORG_NAMES.some(
+            (org) => user.organization.trim().toLowerCase() === org.toLowerCase()
+          )
+        ) {
+          austSet.add(user.handle.toLowerCase());
+        }
+      }
     }
 
     const rows = data.result.rows;
@@ -568,13 +584,11 @@ app.get("/codeforces_standings/:contestId", async (req, res) => {
     let austPointsSum = 0;
     let austCount = 0;
 
-    //const isPenaltyBased = /edu|div\.3|div\.4/i.test(contestName);
-
     for (const row of rows) {
       const handle = row.party.members[0].handle;
       const rank = row.rank;
       const points = row.points || 0;
-      penalty = row.penalty || null;
+      const penalty = row.penalty || null;
       const participant = { handle, rank, points, penalty };
       globalStandings.push(participant);
 
@@ -602,58 +616,75 @@ app.get("/codeforces_standings/:contestId", async (req, res) => {
       .json({ error: "Failed to fetch Codeforces standings" });
   }
 });
+
 async function scrapeCodeforces() {
   try {
-    console.log("[Codeforces] Fetching with Puppeteer...");
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-    const page = await browser.newPage();
+    console.log("[Codeforces] Fetching with API...");
 
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    );
+    const apiUrl = "https://codeforces.com/api/contest.list";
+    const response = await fetch(apiUrl);
+    const data = await response.json();
 
-    await page.goto("https://codeforces.com/contests", {
-      waitUntil: "networkidle2",
-    });
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    if (data.status !== "OK") {
+      throw new Error("Codeforces API returned an error");
+    }
 
-    const contests = await page.evaluate(() => {
-      const rows = Array.from(
-        document.querySelectorAll("table tbody tr[data-contestid]")
-      );
+    const contests = data.result
+      .filter((contest) => contest.phase === "BEFORE")
+      .map((contest) => {
+        const contestId = contest.id;
+        const contestName = contest.name.trim();
+        const writers = [];
 
-      return rows
-        .map((row) => {
-          const contestId = row.getAttribute("data-contestid");
-          const cells = row.querySelectorAll("td");
+        const startTimeDate = new Date(contest.startTimeSeconds * 1000);
 
-          if (cells.length < 6) return null;
+        // Get ISO string: "2025-11-07T19:00:00.000Z"
+        let iso = startTimeDate.toISOString();
 
-          return {
-            platform: "Codeforces",
-            contestId,
-            contestName: cells[0].innerText.trim(),
-            writers: Array.from(cells[1].querySelectorAll("a")).map((a) =>
-              a.innerText.trim()
-            ),
-            startTime: cells[2].innerText.trim(),
-            length: cells[3].innerText.trim(),
-            status: cells[4].innerText.trim(),
-            extra: cells[5].innerText.trim(),
-          };
-        })
-        .filter(
-          (contest) =>
-            contest &&
-            contest.status &&
-            contest.status.toLowerCase().includes("before start")
-        );
-    });
+        // Remove milliseconds and replace T with space
+        let startTime = iso.replace(/\.\d{3}Z$/, "+0000").replace("T", " ");
 
-    await browser.close();
+        ///console.log(startTime);
+        // "2025-11-07 19:00:00+0000"
+
+        const hours = Math.floor(contest.durationSeconds / 3600);
+        const minutes = Math.floor((contest.durationSeconds % 3600) / 60);
+        const length = `${hours.toString().padStart(2, "0")}:${minutes
+          .toString()
+          .padStart(2, "0")}`;
+
+        const status = "Before Start";
+        const now = Math.floor(Date.now() / 1000);
+        const diff = contest.startTimeSeconds - now;
+
+        let extra;
+        if (diff <= 0) {
+          extra = "Starting soon";
+        } else {
+          const days = Math.floor(diff / (24 * 3600));
+          const hours = Math.floor((diff % (24 * 3600)) / 3600);
+          const minutes = Math.floor((diff % 3600) / 60);
+
+          let parts = [];
+          if (days > 0) parts.push(`${days}d`);
+          if (hours > 0) parts.push(`${hours}h`);
+          if (minutes > 0) parts.push(`${minutes}m`);
+
+          extra = "Starts in " + parts.join(" ");
+        }
+
+        return {
+          platform: "Codeforces",
+          contestId,
+          contestName,
+          writers,
+          startTime,
+          length,
+          status,
+          extra,
+        };
+      });
+
     console.log("[Codeforces] Contests fetched:", contests.length);
     return contests;
   } catch (error) {
@@ -681,10 +712,16 @@ async function scrapeCodeChef() {
       timeout: 60000,
     });
 
-    // Wait for the container to load
-    await page.waitForSelector("div._dataTable__container_14pun_417", {
-      timeout: 15000,
-    });
+    // Wait for the actual contest rows to render, not just the (empty) outer
+    // container — CodeChef mounts the container first and fills rows in
+    // asynchronously, so waiting on the container alone races with a 0-result read.
+    try {
+      await page.waitForSelector("div._data__container_14pun_533", {
+        timeout: 15000,
+      });
+    } catch (e) {
+      console.warn("[CodeChef] No contest rows appeared within timeout");
+    }
 
     const contests = await page.evaluate(() => {
       const contestsData = [];
