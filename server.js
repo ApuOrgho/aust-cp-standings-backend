@@ -10,7 +10,22 @@ puppeteer.use(StealthPlugin());
 const app = express();
 app.use(cors());
 app.use(express.json());
-const PORT = 3011;
+// Render (and most PaaS hosts) assign the listen port via $PORT at runtime.
+const PORT = process.env.PORT || 3011;
+
+const PUPPETEER_LAUNCH_OPTIONS = {
+  headless: true,
+  args: [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    // Containers default to a tiny /dev/shm, which crashes Chrome without this.
+    "--disable-dev-shm-usage",
+  ],
+};
+
+app.get("/", (req, res) => {
+  res.json({ status: "ok" });
+});
 const AUST_AFFILIATIONS = [
   "Ahsanullah University Of Science and Technology",
   "AUST",
@@ -40,81 +55,80 @@ app.get("/codechef_standings", async (req, res) => {
       { code: `START${inputCode}D`, divNum: 4 },
     ];
 
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+    const browser = await puppeteer.launch(PUPPETEER_LAUNCH_OPTIONS);
 
     let allStandings = [];
+    try {
+      for (const { code, divNum } of DIVISIONS) {
+        const page = await browser.newPage();
+        await page.setUserAgent(
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+        );
 
-    for (const { code, divNum } of DIVISIONS) {
-      const page = await browser.newPage();
-      await page.setUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
-      );
+        const url = `https://www.codechef.com/rankings/${code}?filterBy=Institution%3D${INSTITUTION_ENCODED}&itemsPerPage=${ITEMS_PER_PAGE}&order=asc&page=1&sortBy=rank`;
 
-      const url = `https://www.codechef.com/rankings/${code}?filterBy=Institution%3D${INSTITUTION_ENCODED}&itemsPerPage=${ITEMS_PER_PAGE}&order=asc&page=1&sortBy=rank`;
+        /*console.log(
+          `Fetching Div ${divNum} - Page 1 - Institution: ${decodeURIComponent(
+            INSTITUTION_ENCODED
+          )}`
+        );*/
 
-      /*console.log(
-        `Fetching Div ${divNum} - Page 1 - Institution: ${decodeURIComponent(
-          INSTITUTION_ENCODED
-        )}`
-      );*/
+        await page.goto(url, { waitUntil: "networkidle2" });
+        await page.waitForSelector("table");
 
-      await page.goto(url, { waitUntil: "networkidle2" });
-      await page.waitForSelector("table");
+        const standingsPage = await page.evaluate((divNum) => {
+          const rows = document.querySelectorAll("table tbody tr");
+          const data = [];
 
-      const standingsPage = await page.evaluate((divNum) => {
-        const rows = document.querySelectorAll("table tbody tr");
-        const data = [];
+          rows.forEach((row) => {
+            const cols = row.querySelectorAll("td");
 
-        rows.forEach((row) => {
-          const cols = row.querySelectorAll("td");
+            if (cols.length >= 3) {
+              let rank = cols[0]?.innerText.trim().split("\n").pop() || "";
 
-          if (cols.length >= 3) {
-            let rank = cols[0]?.innerText.trim().split("\n").pop() || "";
+              let username = "";
+              let rating = "";
 
-            let username = "";
-            let rating = "";
+              const usernameCell = cols[1];
+              const usernameSpan =
+                usernameCell.querySelector("a") ||
+                usernameCell.querySelector("span") ||
+                usernameCell;
 
-            const usernameCell = cols[1];
-            const usernameSpan =
-              usernameCell.querySelector("a") ||
-              usernameCell.querySelector("span") ||
-              usernameCell;
+              const usernameRaw = usernameSpan.textContent.trim();
 
-            const usernameRaw = usernameSpan.textContent.trim();
+              const match = usernameRaw.match(/^(\d+★)?\s*(.*)$/);
+              if (match) {
+                rating = match[1] || "";
+                username = match[2].trim();
+              } else {
+                username = usernameRaw;
+              }
 
-            const match = usernameRaw.match(/^(\d+★)?\s*(.*)$/);
-            if (match) {
-              rating = match[1] || "";
-              username = match[2].trim();
-            } else {
-              username = usernameRaw;
+              let totalScore = cols[2]?.innerText.trim().split("\n").pop() || "";
+
+              if (rank && username && totalScore) {
+                data.push({
+                  Div: divNum,
+                  rank,
+                  username,
+                  rating,
+                  totalScore,
+                });
+              }
             }
+          });
 
-            let totalScore = cols[2]?.innerText.trim().split("\n").pop() || "";
+          return data;
+        }, divNum);
 
-            if (rank && username && totalScore) {
-              data.push({
-                Div: divNum,
-                rank,
-                username,
-                rating,
-                totalScore,
-              });
-            }
-          }
-        });
-
-        return data;
-      }, divNum);
-
-      await page.close();
-      allStandings = allStandings.concat(standingsPage);
+        await page.close();
+        allStandings = allStandings.concat(standingsPage);
+      }
+    } finally {
+      await browser.close();
     }
 
-    await browser.close();
     res.json({ standings: allStandings });
   } catch (err) {
     console.error(err);
@@ -128,10 +142,7 @@ app.get("/codechef_ratings_all", async (req, res) => {
 
   let browser = null;
   try {
-    browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+    browser = await puppeteer.launch(PUPPETEER_LAUNCH_OPTIONS);
 
     const page = await browser.newPage();
 
@@ -276,46 +287,45 @@ app.get("/codechef_ratings_all", async (req, res) => {
 // Fetch AtCoder ratings for AUST
 app.get("/atcoder_ratings_all", async (req, res) => {
   try {
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
+    const browser = await puppeteer.launch(PUPPETEER_LAUNCH_OPTIONS);
 
     let combinedRatings = [];
 
-    for (const affiliation of AUST_AFFILIATIONS) {
-      const page = await browser.newPage();
-      const url = RATINGS_URL(affiliation);
+    try {
+      for (const affiliation of AUST_AFFILIATIONS) {
+        const page = await browser.newPage();
+        const url = RATINGS_URL(affiliation);
 
-      ///console.log(`Scraping ratings for affiliation: ${affiliation}`);
+        ///console.log(`Scraping ratings for affiliation: ${affiliation}`);
 
-      await page.goto(url, { waitUntil: "networkidle2" });
-      await page.waitForSelector("table");
+        await page.goto(url, { waitUntil: "networkidle2" });
+        await page.waitForSelector("table");
 
-      const ratings = await page.evaluate(() => {
-        const rows = Array.from(document.querySelectorAll("table tbody tr"));
-        return rows
-          .map((row) => {
-            const cols = row.querySelectorAll("td");
-            if (cols.length < 4) return null;
+        const ratings = await page.evaluate(() => {
+          const rows = Array.from(document.querySelectorAll("table tbody tr"));
+          return rows
+            .map((row) => {
+              const cols = row.querySelectorAll("td");
+              if (cols.length < 4) return null;
 
-            // Extract username
-            const rawUsername = cols[1].innerText.trim() || "";
-            const username = rawUsername.split("\n")[0].trim() || "";
+              // Extract username
+              const rawUsername = cols[1].innerText.trim() || "";
+              const username = rawUsername.split("\n")[0].trim() || "";
 
-            // Extract rating (usually last column, index 4)
-            const rating = cols[4]?.innerText.trim() || "";
+              // Extract rating (usually last column, index 4)
+              const rating = cols[4]?.innerText.trim() || "";
 
-            return { username, rating };
-          })
-          .filter(Boolean);
-      });
+              return { username, rating };
+            })
+            .filter(Boolean);
+        });
 
-      combinedRatings = combinedRatings.concat(ratings);
-      await page.close();
+        combinedRatings = combinedRatings.concat(ratings);
+        await page.close();
+      }
+    } finally {
+      await browser.close();
     }
-
-    await browser.close();
 
     // Remove duplicates by username, keep max rating
     const uniqueMap = new Map();
@@ -376,58 +386,62 @@ app.get("/atcoder_standings", async (req, res) => {
   }
   const results = [];
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+  try {
+    const browser = await puppeteer.launch(PUPPETEER_LAUNCH_OPTIONS);
 
-  const page = await browser.newPage();
-  await page.setUserAgent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-  );
-
-  for (let handle of atcoderHandles) {
     try {
-      const url = `https://atcoder.jp/users/${handle}/history`;
-      ///console.log(`🔍 Scraping history for: ${handle}`);
-      await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-
-      const contests = await page.evaluate(() => {
-        const rows = Array.from(document.querySelectorAll("table tbody tr"));
-        return rows.map((row) => {
-          const cells = row.querySelectorAll("td");
-          return {
-            contestDate: cells[0]?.innerText.trim(), // Ignored later
-            contestName: cells[1]?.innerText.trim(),
-            rank: cells[2]?.innerText.trim(),
-            performance: cells[3]?.innerText.trim(),
-            newRating: cells[4]?.innerText.trim(),
-            diff: cells[5]?.innerText.trim(),
-          };
-        });
-      });
-
-      const matched = contests.find((c) =>
-        c.contestName.includes(fullContestName)
+      const page = await browser.newPage();
+      await page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
       );
-      if (matched) {
-        results.push({
-          handle,
-          contestName: matched.contestName,
-          rank: matched.rank,
-          performance: matched.performance,
-          newRating: matched.newRating,
-          diff: matched.diff,
-        });
+
+      for (let handle of atcoderHandles) {
+        try {
+          const url = `https://atcoder.jp/users/${handle}/history`;
+          ///console.log(`🔍 Scraping history for: ${handle}`);
+          await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+
+          const contests = await page.evaluate(() => {
+            const rows = Array.from(document.querySelectorAll("table tbody tr"));
+            return rows.map((row) => {
+              const cells = row.querySelectorAll("td");
+              return {
+                contestDate: cells[0]?.innerText.trim(), // Ignored later
+                contestName: cells[1]?.innerText.trim(),
+                rank: cells[2]?.innerText.trim(),
+                performance: cells[3]?.innerText.trim(),
+                newRating: cells[4]?.innerText.trim(),
+                diff: cells[5]?.innerText.trim(),
+              };
+            });
+          });
+
+          const matched = contests.find((c) =>
+            c.contestName.includes(fullContestName)
+          );
+          if (matched) {
+            results.push({
+              handle,
+              contestName: matched.contestName,
+              rank: matched.rank,
+              performance: matched.performance,
+              newRating: matched.newRating,
+              diff: matched.diff,
+            });
+          }
+        } catch (err) {
+          console.error(`❌ Failed for ${handle}:`, err.message);
+        }
       }
-    } catch (err) {
-      console.error(`❌ Failed for ${handle}:`, err.message);
+    } finally {
+      await browser.close();
     }
+
+    res.json({ contestId, fullContestName, results });
+  } catch (err) {
+    console.error("❌ Failed to launch browser for AtCoder standings:", err.message);
+    res.status(500).json({ error: "Failed to fetch AtCoder standings" });
   }
-
-  await browser.close();
-
-  res.json({ contestId, fullContestName, results });
 });
 
 app.get("/codeforces_ratings_all", async (req, res) => {
@@ -696,79 +710,80 @@ async function scrapeCodeforces() {
 async function scrapeCodeChef() {
   try {
     console.log("[CodeChef] Fetching with Puppeteer...");
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    });
-    const page = await browser.newPage();
+    const browser = await puppeteer.launch(PUPPETEER_LAUNCH_OPTIONS);
 
-    // Set user agent to look like a normal browser
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    );
-
-    await page.goto("https://www.codechef.com/contests", {
-      waitUntil: "networkidle2",
-      timeout: 60000,
-    });
-
-    // Wait for the actual contest rows to render, not just the (empty) outer
-    // container — CodeChef mounts the container first and fills rows in
-    // asynchronously, so waiting on the container alone races with a 0-result read.
+    let contests;
     try {
-      await page.waitForSelector("div._data__container_14pun_533", {
-        timeout: 15000,
+      const page = await browser.newPage();
+
+      // Set user agent to look like a normal browser
+      await page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+      );
+
+      await page.goto("https://www.codechef.com/contests", {
+        waitUntil: "networkidle2",
+        timeout: 60000,
       });
-    } catch (e) {
-      console.warn("[CodeChef] No contest rows appeared within timeout");
-    }
 
-    const contests = await page.evaluate(() => {
-      const contestsData = [];
-      const container = document.querySelector(
-        "div._dataTable__container_14pun_417"
-      );
-      if (!container) return contestsData;
-
-      const contestGroups = container.querySelectorAll(
-        "div._flex__container_14pun_528"
-      );
-      contestGroups.forEach((group) => {
-        const contests = group.querySelectorAll(
-          "div._data__container_14pun_533"
-        );
-        contests.forEach((contest) => {
-          const anchor = contest.querySelector("a");
-          const nameSpan = anchor ? anchor.querySelector("span") : null;
-          const contestName = nameSpan ? nameSpan.innerText.trim() : null;
-          const contestUrl = anchor ? anchor.href : null;
-
-          const timerDiv = contest.querySelector(
-            "div._timer__container_14pun_590"
-          );
-          let startTime = "";
-          if (timerDiv) {
-            const timeParts = Array.from(timerDiv.querySelectorAll("p"))
-              .map((p) => p.innerText.trim())
-              .join(" ");
-            startTime = `Starts in ${timeParts}`;
-          }
-
-          if (contestName && startTime) {
-            contestsData.push({
-              platform: "CodeChef",
-              contestName,
-              startTime,
-              contestUrl,
-            });
-          }
+      // Wait for the actual contest rows to render, not just the (empty) outer
+      // container — CodeChef mounts the container first and fills rows in
+      // asynchronously, so waiting on the container alone races with a 0-result read.
+      try {
+        await page.waitForSelector("div._data__container_14pun_533", {
+          timeout: 15000,
         });
+      } catch (e) {
+        console.warn("[CodeChef] No contest rows appeared within timeout");
+      }
+
+      contests = await page.evaluate(() => {
+        const contestsData = [];
+        const container = document.querySelector(
+          "div._dataTable__container_14pun_417"
+        );
+        if (!container) return contestsData;
+
+        const contestGroups = container.querySelectorAll(
+          "div._flex__container_14pun_528"
+        );
+        contestGroups.forEach((group) => {
+          const contests = group.querySelectorAll(
+            "div._data__container_14pun_533"
+          );
+          contests.forEach((contest) => {
+            const anchor = contest.querySelector("a");
+            const nameSpan = anchor ? anchor.querySelector("span") : null;
+            const contestName = nameSpan ? nameSpan.innerText.trim() : null;
+            const contestUrl = anchor ? anchor.href : null;
+
+            const timerDiv = contest.querySelector(
+              "div._timer__container_14pun_590"
+            );
+            let startTime = "";
+            if (timerDiv) {
+              const timeParts = Array.from(timerDiv.querySelectorAll("p"))
+                .map((p) => p.innerText.trim())
+                .join(" ");
+              startTime = `Starts in ${timeParts}`;
+            }
+
+            if (contestName && startTime) {
+              contestsData.push({
+                platform: "CodeChef",
+                contestName,
+                startTime,
+                contestUrl,
+              });
+            }
+          });
+        });
+
+        return contestsData;
       });
-
-      return contestsData;
-    });
-
-    await browser.close();
+    } finally {
+      await browser.close();
+    }
 
     console.log("[CodeChef] Contests fetched:", contests.length);
     return contests;

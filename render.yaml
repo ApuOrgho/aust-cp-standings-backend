@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: aust-cp-standings-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
