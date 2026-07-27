@@ -466,13 +466,9 @@ app.get("/codeforces_ratings_all", async (req, res) => {
       "AUST",
     ];
 
-    // Codeforces' own activeOnly=true flag is much stricter than "active in the
-    // last few months" — empirically it only keeps users who competed in the
-    // last few weeks, which cut AUST's list down to ~1/3 of its real size.
-    // activeOnly=false (the default) still excludes truly retired accounts
-    // while keeping everyone who has a current rating, which matches what we
-    // actually want here.
-    const apiUrl = `https://codeforces.com/api/user.ratedList?activeOnly=false`;
+    // Only users Codeforces itself classifies as active (per user.ratedList's
+    // activeOnly flag) should show up here.
+    const apiUrl = `https://codeforces.com/api/user.ratedList?activeOnly=true`;
     const response = await fetch(apiUrl);
     const data = await response.json();
 
