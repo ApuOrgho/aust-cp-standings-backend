@@ -12,4 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping backend health check
-        run: curl -sS -m 30 -o /dev/null -w "HTTP %{http_code}\n" https://aust-cp-standings-backend-1.onrender.com/
+        # Retries ride out Render cold-start hiccups; the trailing `|| true`
+        # keeps a single missed ping from spamming failure-notification
+        # emails for what is just a best-effort keep-alive request.
+        run: |
+          curl -sS -m 30 --retry 3 --retry-delay 5 --retry-all-errors \
+            -o /dev/null -w "HTTP %{http_code}\n" \
+            https://aust-cp-standings-backend-1.onrender.com/ || true
