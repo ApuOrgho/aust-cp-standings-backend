@@ -8,7 +8,75 @@ const cheerio = require("cheerio");
 puppeteer.use(StealthPlugin());
 
 const app = express();
-app.use(cors());
+
+// Render sits behind a proxy (Cloudflare -> Render's router), so without this
+// req.ip would resolve to that proxy's address for every visitor, and the
+// rate limiter below would lump all callers into a single bucket.
+app.set("trust proxy", 1);
+
+// Only these origins are allowed to call the API from a browser.
+const ALLOWED_ORIGINS = new Set([
+  "https://cp-standings.apuorgho.com",
+  "https://aust-cp-standings-frontend.vercel.app",
+]);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // No Origin header means a non-browser caller (curl, Render's health
+      // check, the keep-alive ping) -- let those through unauthenticated.
+      if (!origin || ALLOWED_ORIGINS.has(origin)) {
+        return callback(null, true);
+      }
+      callback(new Error("Not allowed by CORS"));
+    },
+  })
+);
+
+// Per-IP token bucket: each caller starts with a burst of REQUEST_BUCKET_SIZE
+// requests and regenerates one every REFILL_INTERVAL_MS, so a single page
+// load (which fires several requests at once) isn't throttled but sustained
+// hammering of these Puppeteer-backed routes is.
+const REQUEST_BUCKET_SIZE = 15;
+const REFILL_INTERVAL_MS = 2000; // 1 token per 2s -> 30 requests/min sustained
+const REFILL_RATE_PER_MS = 1 / REFILL_INTERVAL_MS;
+const BUCKET_IDLE_TTL_MS = 30 * 60 * 1000;
+
+const buckets = new Map();
+
+function takeToken(key) {
+  const now = Date.now();
+  let bucket = buckets.get(key);
+  if (!bucket) {
+    bucket = { tokens: REQUEST_BUCKET_SIZE, lastRefill: now };
+    buckets.set(key, bucket);
+  }
+
+  bucket.tokens = Math.min(
+    REQUEST_BUCKET_SIZE,
+    bucket.tokens + (now - bucket.lastRefill) * REFILL_RATE_PER_MS
+  );
+  bucket.lastRefill = now;
+
+  if (bucket.tokens < 1) return false;
+  bucket.tokens -= 1;
+  return true;
+}
+
+// Sweep idle buckets periodically so long-running uptime doesn't leak memory
+// for every distinct visitor IP that has ever called the API.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, bucket] of buckets) {
+    if (now - bucket.lastRefill > BUCKET_IDLE_TTL_MS) buckets.delete(key);
+  }
+}, BUCKET_IDLE_TTL_MS).unref();
+
+app.use((req, res, next) => {
+  if (takeToken(req.ip)) return next();
+  res.status(429).json({ error: "Too many requests, please slow down." });
+});
+
 app.use(express.json());
 // Render (and most PaaS hosts) assign the listen port via $PORT at runtime.
 const PORT = process.env.PORT || 3011;
@@ -886,6 +954,15 @@ app.get("/upcoming_contests", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch upcoming contests" });
   }
 });
+// Catches the CORS rejection from the origin check above and responds with
+// clean JSON instead of Express's default HTML error page.
+app.use((err, req, res, next) => {
+  if (err && err.message === "Not allowed by CORS") {
+    return res.status(403).json({ error: "Forbidden: origin not allowed" });
+  }
+  next(err);
+});
+
 // ----------- SERVER START -----------
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
